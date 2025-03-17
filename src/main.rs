@@ -46,11 +46,18 @@ impl<'r> FromRequest<'r> for BearerToken {
 
 #[derive(Deserialize, Serialize, FromForm)]
 struct AccessTokenRequest {
-    //grant_type: String,
+    grant_type: String,
     client_id: String,
     //client_secret: String,
     //redirect_uri: String,
     code: String,
+}
+
+#[derive(Serialize)]
+struct AccessTokenResponse {
+    access_token: String,
+    token_type: String,
+    expires_in: i64,
 }
 
 // a post accessToken se accede 1 sola vez con el code para obtener el token
@@ -58,15 +65,23 @@ struct AccessTokenRequest {
 async fn access_token(
     state: &State<AppState>,
     request: Form<AccessTokenRequest>,
-) -> Result<Json<Session>, Status> {
+) -> Result<Json<AccessTokenResponse>, Status> {
     // procesar los datos del formulario
-    //let grant_type = &request.grant_type;
+    let grant_type = &request.grant_type;
     let client_id = &request.client_id;
     //let client_secret = &request.client_secret;
     //let redirect_uri = &request.redirect_uri;
     let code = &request.code;
 
-    print!("access_token client_id: {}, code: {}", client_id, code);
+    print!(
+        "access_token grant_type: {}, client_id: {}, code: {}",
+        grant_type, client_id, code
+    );
+
+    if grant_type != "authorization_code" {
+        eprintln!("Error invalid grant_type");
+        return Err(Status::BadRequest);
+    }
 
     let pool = state.pool.clone();
 
@@ -84,10 +99,10 @@ async fn access_token(
     // Log para inspeccionar la sesión
     println!("access_token Session: {:?}", session);
 
-    let token = randomtoken::random_token(128);
+    let access_token = randomtoken::random_token(128);
 
     // Actualiza el código de autorización a nulo
-    postgres_update_session_set_token_codenull_by_id(&pool, session.id, &token)
+    postgres_update_session_set_token_codenull_by_id(&pool, session.id, &access_token)
         .await
         .or_else(|err| {
             eprintln!(
@@ -98,10 +113,16 @@ async fn access_token(
         })
         .unwrap();
 
-    session.token = Some(token);
-    session.code = None;
+    // calcula expires_in a partir de session.expires_at
+    let expires_in = session.expires_at.and_utc().timestamp() - Utc::now().timestamp();
 
-    Ok(Json(session.clone()))
+    let access_token_response = AccessTokenResponse {
+        access_token: access_token.clone(),
+        token_type: "Bearer".to_string(),
+        expires_in,
+    };
+
+    Ok(Json(access_token_response))
 }
 
 // a get profile se accede de manera reiterada con el token para obtener la sesión
