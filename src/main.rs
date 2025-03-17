@@ -20,13 +20,10 @@ use sesion::{
     redis_set_session_by_token,
 };
 
-// declara string con token supersecreto que permite crear sesiones nuevas y desactivar viejas
-const SUPER_SECRET: &str = "mysupersecret"; // en un futuro se sacará de ENV
-
-const REDIS_SERVER: &str = "redis://:WEVDH12f34r56w78m9@127.0.0.1/";
-
 struct AppState {
     pool: sqlx::Pool<sqlx::Postgres>,
+    super_secret_token: String,
+    redis_connection_string: String,
 }
 
 struct BearerToken(String);
@@ -109,7 +106,7 @@ async fn access_token(
 // a get profile se accede de manera reiterada con el token para obtener la sesión
 #[get("/profile")]
 async fn profile(state: &State<AppState>, token: BearerToken) -> Result<Json<Session>, Status> {
-    let client = redis::Client::open(REDIS_SERVER).map_err(|err| {
+    let client = redis::Client::open(state.redis_connection_string.clone()).map_err(|err| {
         eprintln!("Error connecting to redis: {:?}", err);
         Status::InternalServerError
     })?;
@@ -139,7 +136,7 @@ async fn profile(state: &State<AppState>, token: BearerToken) -> Result<Json<Ses
     // println!("Session from postgres: {:?}", session);
 
     session.token = None;
-    let client = redis::Client::open(REDIS_SERVER).map_err(|err| {
+    let client = redis::Client::open(state.redis_connection_string.clone()).map_err(|err| {
         eprintln!("Error connecting to redis: {:?}", err);
         Status::InternalServerError
     })?;
@@ -171,7 +168,7 @@ async fn new_session(
     session_request: Json<NewSessionRequest>,
     token: BearerToken,
 ) -> Result<Json<Session>, Status> {
-    if token.0 != SUPER_SECRET {
+    if token.0 != state.super_secret_token {
         eprintln!("Error invalid super secret token");
         return Err(Status::Unauthorized);
     }
@@ -225,7 +222,7 @@ async fn delete_session(
     session_request: Json<DeleteSessionRequest>,
     token: BearerToken,
 ) -> Result<Status, Status> {
-    if token.0 != SUPER_SECRET {
+    if token.0 != state.super_secret_token {
         eprintln!("Error invalid super secret token");
         return Err(Status::Unauthorized);
     }
@@ -257,6 +254,18 @@ async fn delete_session(
 
 #[launch]
 async fn rocket() -> _ {
+    let super_secret_token = std::env::var("AUTH_SUPER_SECRET_TOKEN").unwrap_or_default();
+    if super_secret_token.is_empty() {
+        eprintln!("Error AUTH_SUPER_SECRET_TOKEN is empty");
+        std::process::exit(1);
+    }
+
+    let redis_password = std::env::var("REDIS_PASSWORD").unwrap_or_default();
+    let redis_host = std::env::var("REDIS_SERVICE").unwrap_or_default();
+    let redis_port = std::env::var("REDIS_PORT").unwrap_or_default();
+    let redis_connection_string =
+        format!("redis://:{}@{}:{}/", redis_password, redis_host, redis_port);
+
     let postgres_db = std::env::var("POSTGRES_DB").unwrap_or_default();
     let postgres_user = std::env::var("POSTGRES_USER").unwrap_or_default();
     let postgres_password = std::env::var("POSTGRES_PASSWORD").unwrap_or_default();
@@ -296,10 +305,16 @@ async fn rocket() -> _ {
 
     postgresini::initialization(pool.clone()).await;
 
-    rocket::build().manage(AppState { pool }).mount(
-        "/",
-        routes![access_token, delete_session, new_session, profile, healthz],
-    )
+    rocket::build()
+        .manage(AppState {
+            pool,
+            super_secret_token,
+            redis_connection_string,
+        })
+        .mount(
+            "/",
+            routes![access_token, delete_session, new_session, profile, healthz],
+        )
 }
 
 #[get("/healthz")]

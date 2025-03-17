@@ -2,7 +2,7 @@
 IMAGE_NAME=rust-app
 LOCAL_REGISTRY=localhost:32000
 K8S_NAMESPACE=dummy-corp-erp-namespace
-K8S_DEPLOYMENT=dummy-auth-rust-app
+K8S_DEPLOYMENT=dummy-corp-auth-rust-app
 
 .PHONY: build tag push restart all
 
