@@ -109,7 +109,7 @@ async fn access_token(
         return Err(Status::BadRequest);
     }
 
-    if session.client_id != client_id {
+    if session.client_id != *client_id {
         eprintln!("Error invalid client_id");
         return Err(Status::BadRequest);
     }
