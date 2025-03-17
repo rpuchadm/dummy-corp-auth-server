@@ -49,7 +49,7 @@ struct AccessTokenRequest {
     grant_type: String,
     client_id: String,
     //client_secret: String,
-    //redirect_uri: String,
+    redirect_uri: String,
     code: String,
 }
 
@@ -70,12 +70,12 @@ async fn access_token(
     let grant_type = &request.grant_type;
     let client_id = &request.client_id;
     //let client_secret = &request.client_secret;
-    //let redirect_uri = &request.redirect_uri;
+    let redirect_uri = &request.redirect_uri;
     let code = &request.code;
 
     print!(
-        "access_token grant_type: {}, client_id: {}, code: {}",
-        grant_type, client_id, code
+        "access_token grant_type: {}, client_id: {}, code: {}, redirect_uri: {}",
+        grant_type, client_id, code, redirect_uri
     );
 
     if grant_type != "authorization_code" {
@@ -86,7 +86,7 @@ async fn access_token(
     let pool = state.pool.clone();
 
     // Obtiene la sesión por el código de autorización y el id del cliente
-    let mut session = postgres_get_session_by_code_client_id(&pool, code, client_id)
+    let session = postgres_get_session_by_code_client_id(&pool, code, client_id)
         .await
         .map_err(|err| {
             eprintln!(
@@ -97,7 +97,22 @@ async fn access_token(
         })?;
 
     // Log para inspeccionar la sesión
-    println!("access_token Session: {:?}", session);
+    //println!("access_token Session: {:?}", session);
+
+    if session.token.is_some() {
+        eprintln!("Error invalid code");
+        return Err(Status::BadRequest);
+    }
+
+    if session.expires_at.and_utc() < Utc::now() {
+        eprintln!("Error expired code");
+        return Err(Status::BadRequest);
+    }
+
+    if session.client_id != client_id {
+        eprintln!("Error invalid client_id");
+        return Err(Status::BadRequest);
+    }
 
     let access_token = randomtoken::random_token(128);
 
