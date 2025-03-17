@@ -4,5 +4,4 @@ namespace: dummy-corp-erp-namespace
 resources:
   - deployment.yaml
   - service.yaml
-  - ingress.yaml
-  - postgresql.yaml
+  - redis.yaml
