@@ -7,6 +7,7 @@ use rocket::request::{self, FromRequest, Request};
 use rocket::serde::json::Json;
 use rocket::serde::{Deserialize, Serialize};
 use rocket::{State, delete, get, launch, post, routes}; // put
+use rocket_cors::{AllowedHeaders, AllowedOrigins, CorsOptions};
 use sqlx::{Decode, FromRow};
 
 mod postgresini;
@@ -305,6 +306,8 @@ async fn rocket() -> _ {
 
     postgresini::initialization(pool.clone()).await;
 
+    let cors = cors_options().to_cors().expect("Error al configurar CORS");
+
     rocket::build()
         .manage(AppState {
             pool,
@@ -315,9 +318,32 @@ async fn rocket() -> _ {
             "/",
             routes![access_token, delete_session, new_session, profile, healthz],
         )
+        .attach(cors)
 }
 
 #[get("/healthz")]
 async fn healthz() -> &'static str {
     "OK"
+}
+
+fn cors_options() -> CorsOptions {
+    let allowed_origins = AllowedOrigins::some_exact(&["http://localhost:5173/"]);
+
+    // You can also deserialize this
+    rocket_cors::CorsOptions {
+        allowed_origins,
+        allowed_methods: vec![
+            rocket::http::Method::Delete,
+            rocket::http::Method::Get,
+            rocket::http::Method::Post,
+            rocket::http::Method::Put,
+            rocket::http::Method::Options,
+        ]
+        .into_iter()
+        .map(From::from)
+        .collect(),
+        allowed_headers: AllowedHeaders::some(&["Authorization", "Accept", "Content-Type"]),
+        allow_credentials: true,
+        ..Default::default()
+    }
 }
