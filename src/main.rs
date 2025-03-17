@@ -73,10 +73,10 @@ async fn access_token(
     let redirect_uri = &request.redirect_uri;
     let code = &request.code;
 
-    print!(
-        "access_token grant_type: {}, client_id: {}, code: {}, redirect_uri: {}",
-        grant_type, client_id, code, redirect_uri
-    );
+    //print!(
+    //    "access_token grant_type: {}, client_id: {}, code: {}, redirect_uri: {}\n",
+    //    grant_type, client_id, code, redirect_uri
+    //);
 
     if grant_type != "authorization_code" {
         eprintln!("Error invalid grant_type");
@@ -300,8 +300,16 @@ async fn rocket() -> _ {
     let redis_password = std::env::var("REDIS_PASSWORD").unwrap_or_default();
     let redis_host = std::env::var("REDIS_SERVICE").unwrap_or_default();
     let redis_port = std::env::var("REDIS_PORT").unwrap_or_default();
+
+    if redis_password.is_empty() || redis_host.is_empty() || redis_port.is_empty() {
+        eprintln!("Error REDIS_PASSWORD, REDIS_SERVICE or REDIS_PORT is empty");
+        std::process::exit(1);
+    }
+
     let redis_connection_string =
         format!("redis://:{}@{}:{}/", redis_password, redis_host, redis_port);
+
+    //print!("redis_connection_string: {}\n", redis_connection_string);
 
     let postgres_db = std::env::var("POSTGRES_DB").unwrap_or_default();
     let postgres_user = std::env::var("POSTGRES_USER").unwrap_or_default();
