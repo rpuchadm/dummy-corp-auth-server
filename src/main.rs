@@ -1,14 +1,14 @@
 use chrono::prelude::*;
-use rocket::FromForm;
 use rocket::form::Form;
 use rocket::http::Status;
 use rocket::outcome::Outcome;
 use rocket::request::{self, FromRequest, Request};
+use rocket::response::status::NotFound;
 use rocket::serde::json::Json;
 use rocket::serde::{Deserialize, Serialize};
-use rocket::{State, delete, get, launch, post, routes}; // put
+use rocket::{FromForm, catchers};
+use rocket::{State, catch, delete, get, launch, post, routes};
 use rocket_cors::{AllowedHeaders, AllowedOrigins, CorsOptions};
-use sqlx::{Decode, FromRow};
 
 mod postgresini;
 mod randomtoken;
@@ -318,6 +318,7 @@ async fn rocket() -> _ {
             "/",
             routes![access_token, delete_session, new_session, profile, healthz],
         )
+        .register("/", catchers![not_found])
         .attach(cors)
 }
 
@@ -346,4 +347,13 @@ fn cors_options() -> CorsOptions {
         allow_credentials: true,
         ..Default::default()
     }
+}
+
+#[catch(404)]
+fn not_found(req: &Request) -> NotFound<String> {
+    // Registrar el error 404 en los logs
+    eprintln!("Ruta no encontrada: {}", req.uri());
+
+    // Devolver una respuesta 404 personalizada
+    NotFound(format!("Lo siento, la ruta '{}' no existe.", req.uri()))
 }
