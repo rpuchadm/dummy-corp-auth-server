@@ -257,13 +257,35 @@ async fn delete_session(
 
 #[launch]
 async fn rocket() -> _ {
-    let pool: sqlx::Pool<sqlx::Postgres> = sqlx::postgres::PgPool::connect(POSTGRES_SERVER)
-        .await
-        .or_else(|err| {
-            eprintln!("Error connecting to the database: {:?}", err);
-            Err(err)
-        })
-        .unwrap();
+    let postgres_db = std::env::var("POSTGRES_DB").unwrap_or_default();
+    let postgres_user = std::env::var("POSTGRES_USER").unwrap_or_default();
+    let postgres_password = std::env::var("POSTGRES_PASSWORD").unwrap_or_default();
+    let postgres_host = std::env::var("POSTGRES_SERVICE").unwrap_or_default();
+
+    if postgres_db.is_empty()
+        || postgres_user.is_empty()
+        || postgres_password.is_empty()
+        || postgres_host.is_empty()
+    {
+        eprintln!(
+            "Error POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD or POSTGRES_SERVICE is empty"
+        );
+        std::process::exit(1);
+    }
+
+    let postgres_connexion_string = format!(
+        "postgres://{}:{}@{}/{}",
+        postgres_user, postgres_password, postgres_host, postgres_db
+    );
+
+    let pool: sqlx::Pool<sqlx::Postgres> =
+        sqlx::postgres::PgPool::connect(postgres_connexion_string.as_str())
+            .await
+            .or_else(|err| {
+                eprintln!("Error connecting to the database: {:?}", err);
+                Err(err)
+            })
+            .unwrap();
 
     // sacar de variables de entorno AUTH_SUPER_SECRET_TOKEN
     let auth_super_secret_token = std::env::var("AUTH_SUPER_SECRET_TOKEN").unwrap_or_default();
@@ -276,9 +298,11 @@ async fn rocket() -> _ {
 
     rocket::build().manage(AppState { pool }).mount(
         "/",
-        routes![access_token, delete_session, new_session, profile],
+        routes![access_token, delete_session, new_session, profile, healthz],
     )
 }
 
-// constante con el servidor de postgres
-const POSTGRES_SERVER: &str = "postgresql://myuser:mypassword@localhost:5432/mydatabase";
+#[get("/healthz")]
+async fn healthz() -> &'static str {
+    "OK"
+}

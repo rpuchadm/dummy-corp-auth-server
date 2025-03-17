@@ -1,1 +1,3 @@
 /target
+docker/Rocket.toml
+docker/dummy-corp-auth-server
