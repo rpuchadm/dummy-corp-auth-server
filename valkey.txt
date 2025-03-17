@@ -1,0 +1,58 @@
+
+docker pull valkey/valkey
+docker pull redis
+
+docker network create valkey-network
+docker run -d --name valkey-instance --network valkey-network -p 6379:6379 valkey/valkey --requirepass "WEVDH12f34r56w78m9"
+docker run -it --rm --network valkey-network redis redis-cli -h valkey-instance -p 6379 -a WEVDH12f34r56w78m9
+
+valkey-instance:6379> SET valor_1234 "Hello World"
+OK
+valkey-instance:6379> GET valor_1234
+"Hello World"
+valkey-instance:6379>
+
+docker ps
+(base) rpuchadm@rpuchadm-HP-ProBook-450-G7:~$ docker ps
+CONTAINER ID   IMAGE           COMMAND                  CREATED              STATUS              PORTS                                       NAMES
+c6d4ac3d3fd2   valkey/valkey   "docker-entrypoint.s…"   About a minute ago   Up About a minute   0.0.0.0:6379->6379/tcp, :::6379->6379/tcp   valkey-instance
+
+docker kill c6d4ac3d3fd2
+docker rm valkey-instance
+
+
+-----
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valkey-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: valkey
+  template:
+    metadata:
+      labels:
+        app: valkey
+    spec:
+      containers:
+      - name: valkey
+        image: valkey/valkey
+        args: ["--requirepass", "WEVDH12f34r56w78m9"]
+        ports:
+        - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey-service
+spec:
+  selector:
+    app: valkey
+  ports:
+    - protocol: TCP
+      port: 6379
+      targetPort: 6379
+  type: ClusterIP

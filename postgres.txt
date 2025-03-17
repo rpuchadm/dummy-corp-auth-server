@@ -1,0 +1,19 @@
+docker rm -f mypostgres
+
+docker run -d \
+    --name mypostgres \
+    -e POSTGRES_USER=myuser \
+    -e POSTGRES_PASSWORD=mypassword \
+    -e POSTGRES_DB=mydatabase \
+    -p 5432:5432 \
+    postgres
+
+docker ps
+
+docker exec -it mypostgres psql -U myuser -d mydatabase
+
+
+
+------
+
+

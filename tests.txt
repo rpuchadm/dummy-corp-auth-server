@@ -1,0 +1,28 @@
+clear && curl -v -X POST http://localhost:8000/session \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer mysupersecret" \
+     -d '{
+           "client_id": "myclientid",
+           "user_id": 1,
+           "expires_in_min": 120,
+           "attributes": {
+             "key": "value"
+           }
+         }' | jq
+
+clear && curl -v -X POST http://localhost:8000/accessToken \
+     -H "Content-Type: application/x-www-form-urlencoded" \
+     -d "client_id=myclientid" \
+     -d "code=PuX8fBcM6ce2g48AFbDU2XHRVYiYtJSU" | jq
+
+
+clear && curl -v -X GET http://localhost:8000/profile \
+     -H "Authorization: Bearer 9J6k7e6v3DurTeSrrKWYBCRGdzeKsYRaswN45yCIHHd4cPid3RYXrOpksZ1rSWFW7OgRinFmCoV8bjZ63U1y22E3B1L2Qki5idG5S7jkF4DzYJ8GkIAwdSZZCrdO9KEK"  | jq
+
+
+clear && curl -v -X DELETE http://localhost:8000/session \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer mysupersecret" \
+     -d '{
+           "token": "9J6k7e6v3DurTeSrrKWYBCRGdzeKsYRaswN45yCIHHd4cPid3RYXrOpksZ1rSWFW7OgRinFmCoV8bjZ63U1y22E3B1L2Qki5idG5S7jkF4DzYJ8GkIAwdSZZCrdO9KEK"
+         }' | jq
