@@ -127,7 +127,7 @@ pub async fn postgres_update_session_token_null_closed_at_by_id(
 }
 
 const SESSION_TOKEN_KEY: &str = "session-token:";
-const SESSION_TIME_SECONDS: i64 = 60 * 2; // 2 minutos
+const SESSION_TIME_SECONDS: i64 = 60 * 10; // 10 minutos
 pub async fn redis_get_session_by_token(
     client: &redis::Client,
     token: &str,
