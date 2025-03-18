@@ -34,7 +34,8 @@ pub async fn postgres_insert_session(
             expires_at, attributes
         ) VALUES (
             $1, $2, $3,
-            $4, $5
+            $4,
+            $5, $6
         )
         "#,
     )
@@ -80,7 +81,9 @@ pub async fn postgres_get_session_by_code_client_id(
     let session = sqlx::query_as::<_, Session>(
         r#"
         SELECT
-            id, client_id, code, token, user_id, created_at, expires_at, attributes
+            id, client_id, code, token, user_id, 
+            redirect_uri,
+            created_at, expires_at, attributes
         FROM sessions
         WHERE code = $1 and client_id = $2
         and expires_at > now()
