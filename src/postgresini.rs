@@ -34,6 +34,7 @@ pub async fn initialization(pool: sqlx::Pool<sqlx::Postgres>) {
             code TEXT,
             token TEXT,
             user_id INTEGER NOT NULL,
+            redirect_uri TEXT NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP NOT NULL,
             closed_at TIMESTAMP,

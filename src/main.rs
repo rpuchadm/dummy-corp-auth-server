@@ -25,6 +25,7 @@ struct AppState {
     pool: sqlx::Pool<sqlx::Postgres>,
     super_secret_token: String,
     redis_connection_string: String,
+    auth_redis_ttl: i64,
 }
 
 struct BearerToken(String);
@@ -114,6 +115,11 @@ async fn access_token(
         return Err(Status::BadRequest);
     }
 
+    if session.redirect_uri != *redirect_uri {
+        eprintln!("Error invalid redirect_uri");
+        return Err(Status::BadRequest);
+    }
+
     let access_token = randomtoken::random_token(128);
 
     // Actualiza el código de autorización a nulo
@@ -177,7 +183,7 @@ async fn profile(state: &State<AppState>, token: BearerToken) -> Result<Json<Ses
         eprintln!("Error connecting to redis: {:?}", err);
         Status::InternalServerError
     })?;
-    redis_set_session_by_token(&client, &token.0, &session)
+    redis_set_session_by_token(&client, &token.0, &session, state.auth_redis_ttl)
         .await
         .map_err(|err| {
             eprintln!(
@@ -195,6 +201,7 @@ async fn profile(state: &State<AppState>, token: BearerToken) -> Result<Json<Ses
 struct NewSessionRequest {
     client_id: String,
     user_id: i32,
+    redirect_uri: String,
     expires_in_min: i64,
     attributes: serde_json::Value,
 }
@@ -222,6 +229,7 @@ async fn new_session(
         &code,
         &session_request.client_id,
         session_request.user_id,
+        &session_request.redirect_uri,
         expires_at,
         session_request.attributes.clone(),
     )
@@ -240,6 +248,7 @@ async fn new_session(
         code: code_some,
         token: token_none,
         user_id: session_request.user_id,
+        redirect_uri: session_request.redirect_uri.clone(),
         created_at: chrono::Utc::now().naive_utc(),
         expires_at,
         attributes: session_request.attributes.clone(),
@@ -311,6 +320,11 @@ async fn rocket() -> _ {
 
     //print!("redis_connection_string: {}\n", redis_connection_string);
 
+    let auth_redis_ttl = std::env::var("AUTH_REDIS_TTL")
+        .unwrap_or_else(|_| "120".to_string())
+        .parse::<i64>()
+        .expect("AUTH_REDIS_TTL must be a number");
+
     let postgres_db = std::env::var("POSTGRES_DB").unwrap_or_default();
     let postgres_user = std::env::var("POSTGRES_USER").unwrap_or_default();
     let postgres_password = std::env::var("POSTGRES_PASSWORD").unwrap_or_default();
@@ -357,6 +371,7 @@ async fn rocket() -> _ {
             pool,
             super_secret_token,
             redis_connection_string,
+            auth_redis_ttl,
         })
         .mount(
             "/",

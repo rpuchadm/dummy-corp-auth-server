@@ -11,6 +11,7 @@ pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
     pub user_id: i32,
+    pub redirect_uri: String,
     pub created_at: chrono::NaiveDateTime,
     pub expires_at: chrono::NaiveDateTime,
     pub attributes: serde_json::Value,
@@ -21,6 +22,7 @@ pub async fn postgres_insert_session(
     code: &str,
     client_id: &str,
     user_id: i32,
+    redirect_uri: &str,
     expires_at: chrono::NaiveDateTime,
     attributes: serde_json::Value,
 ) -> Result<(), sqlx::Error> {
@@ -28,6 +30,7 @@ pub async fn postgres_insert_session(
         r#"
         INSERT INTO sessions (
             code, client_id, user_id,
+            redirect_uri,
             expires_at, attributes
         ) VALUES (
             $1, $2, $3,
@@ -38,6 +41,7 @@ pub async fn postgres_insert_session(
     .bind(code)
     .bind(client_id)
     .bind(user_id)
+    .bind(redirect_uri)
     .bind(expires_at)
     .bind(attributes)
     .execute(pool)
@@ -53,7 +57,9 @@ pub async fn postgres_get_session_by_codenull_token(
     let session = sqlx::query_as::<_, Session>(
         r#"
         SELECT
-            id, client_id, code, token, user_id, created_at, expires_at, attributes
+            id, client_id, code, token, user_id, 
+            redirect_uri,
+            created_at, expires_at, attributes
         FROM sessions
         WHERE code IS NULL and token = $1
         and expires_at > now()
@@ -127,7 +133,6 @@ pub async fn postgres_update_session_token_null_closed_at_by_id(
 }
 
 const SESSION_TOKEN_KEY: &str = "session-token:";
-const SESSION_TIME_SECONDS: i64 = 60 * 10; // 10 minutos
 pub async fn redis_get_session_by_token(
     client: &redis::Client,
     token: &str,
@@ -146,11 +151,12 @@ pub async fn redis_set_session_by_token(
     client: &redis::Client,
     token: &str,
     session: &Session,
+    auth_redis_ttl: i64,
 ) -> redis::RedisResult<()> {
     let key = format!("{}:{}", SESSION_TOKEN_KEY, token);
     let mut con = client.get_multiplexed_async_connection().await.unwrap();
     let session_json = serde_json::to_string(session).unwrap();
     let _: () = con.set(&key, session_json).await?;
-    let _: () = con.expire(&key, SESSION_TIME_SECONDS).await?;
+    let _: () = con.expire(&key, auth_redis_ttl).await?;
     Ok(())
 }
