@@ -19,31 +19,40 @@ pub struct Session {
 
 pub async fn postgres_insert_session(
     pool: &sqlx::Pool<sqlx::Postgres>,
-    code: &str,
     client_id: &str,
     user_id: i32,
+    code: &str,
+    token: &str,
     redirect_uri: &str,
-    expires_at: chrono::NaiveDateTime,
+    expires_in_min: chrono::NaiveDateTime,
     attributes: serde_json::Value,
 ) -> Result<(), sqlx::Error> {
+    //println!(
+    //    "postgres_insert_session: client_id: {}, user_id: {}, code: {}, token: {}, redirect_uri: {}, expires_in_min: {}, attributes: {}",
+    //    client_id, user_id, code, token, redirect_uri, expires_in_min, attributes
+    //);
+
     sqlx::query(
         r#"
         INSERT INTO sessions (
-            code, client_id, user_id,
+            client_id, user_id,
+            code, token,
             redirect_uri,
             expires_at, attributes
         ) VALUES (
-            $1, $2, $3,
-            $4,
-            $5, $6
+            $1, $2,
+            $3, $4,
+            $5,
+            $6, $7
         )
         "#,
     )
-    .bind(code)
     .bind(client_id)
     .bind(user_id)
+    .bind(code)
+    .bind(token)
     .bind(redirect_uri)
-    .bind(expires_at)
+    .bind(expires_in_min)
     .bind(attributes)
     .execute(pool)
     .await?;
@@ -62,9 +71,9 @@ pub async fn postgres_get_session_by_codenull_token(
             redirect_uri,
             created_at, expires_at, attributes
         FROM sessions
-        WHERE code IS NULL and token = $1
+        WHERE  token = $1
         and expires_at > now()
-        "#,
+        "#, // ( code is NULL or code == '' ) and
     )
     .bind(token)
     .fetch_one(pool)
@@ -102,6 +111,11 @@ pub async fn postgres_update_session_set_token_codenull_by_id(
     id: i32,
     token: &str,
 ) -> Result<(), sqlx::Error> {
+    println!(
+        "postgres_update_session_set_token_codenull_by_id: id: {}, token: {}",
+        id, token
+    );
+
     sqlx::query(
         r#"
         UPDATE sessions
@@ -114,6 +128,13 @@ pub async fn postgres_update_session_set_token_codenull_by_id(
     .execute(pool)
     .await?;
 
+    // let result =
+    /*let rows_affected = result.rows_affected();
+    println!(
+        "postgres_update_session_set_token_codenull_by_id - rows_affected {}",
+        rows_affected
+    );*/
+
     Ok(())
 }
 
@@ -124,7 +145,7 @@ pub async fn postgres_update_session_token_null_closed_at_by_id(
     sqlx::query(
         r#"
         UPDATE sessions
-        SET token = NULL, closed_at = now()
+        SET token = null, closed_at = now()
         WHERE id = $1
         "#,
     )
@@ -162,4 +183,37 @@ pub async fn redis_set_session_by_token(
     let _: () = con.set(&key, session_json).await?;
     let _: () = con.expire(&key, auth_redis_ttl).await?;
     Ok(())
+}
+/*
+CREATE TABLE IF NOT EXISTS auth_clients (
+    id SERIAL PRIMARY KEY,
+    client_id VARCHAR(32) NOT NULL,
+    client_url VARCHAR(255) NOT NULL,
+    client_url_callback VARCHAR(255),
+    client_secret VARCHAR(255),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+); */
+
+#[derive(FromRow)]
+pub struct AuthClient {
+    pub client_secret: Option<String>,
+}
+
+pub async fn postgres_select_auth_client_by_client_id(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    client_id: &str,
+) -> Result<AuthClient, sqlx::Error> {
+    let auth_client = sqlx::query_as::<_, AuthClient>(
+        r#"
+        SELECT
+            client_secret
+        FROM auth_clients
+        WHERE client_id = $1
+        "#,
+    )
+    .bind(client_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(auth_client)
 }

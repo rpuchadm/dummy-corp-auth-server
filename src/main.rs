@@ -14,9 +14,11 @@ mod postgresini;
 mod randomtoken;
 mod sesion;
 
+use serde::de;
 use sesion::{
     Session, postgres_get_session_by_code_client_id, postgres_get_session_by_codenull_token,
-    postgres_insert_session, postgres_update_session_set_token_codenull_by_id,
+    postgres_insert_session, postgres_select_auth_client_by_client_id,
+    postgres_update_session_set_token_codenull_by_id,
     postgres_update_session_token_null_closed_at_by_id, redis_get_session_by_token,
     redis_set_session_by_token,
 };
@@ -49,7 +51,7 @@ impl<'r> FromRequest<'r> for BearerToken {
 struct AccessTokenRequest {
     grant_type: String,
     client_id: String,
-    //client_secret: String,
+    client_secret: Option<String>,
     redirect_uri: String,
     code: String,
 }
@@ -70,7 +72,7 @@ async fn access_token(
     // procesar los datos del formulario
     let grant_type = &request.grant_type;
     let client_id = &request.client_id;
-    //let client_secret = &request.client_secret;
+    let client_secret = &request.client_secret;
     let redirect_uri = &request.redirect_uri;
     let code = &request.code;
 
@@ -79,71 +81,150 @@ async fn access_token(
     //    grant_type, client_id, code, redirect_uri
     //);
 
-    if grant_type != "authorization_code" {
+    if client_id.is_empty() {
+        eprintln!("Error invalid client_id");
+        return Err(Status::BadRequest);
+    }
+    if grant_type != "authorization_code" && grant_type != "client_credentials" {
+        // && grant_type != "refresh_token" {
         eprintln!("Error invalid grant_type");
+        return Err(Status::BadRequest);
+    }
+    if grant_type == "authorization_code" && code.is_empty() {
+        eprintln!("Error grant_type authorization_code but code is empty");
+        return Err(Status::BadRequest);
+    }
+    if grant_type == "authorization_code" && redirect_uri.is_empty() {
+        eprintln!("Error grant_type authorization_code but redirect_uri is empty");
+        return Err(Status::BadRequest);
+    }
+    if grant_type == "client_credentials" && client_secret.is_none() {
+        eprintln!("Error grant_type client_credentials but client_secret is empty");
         return Err(Status::BadRequest);
     }
 
     let pool = state.pool.clone();
 
-    // Obtiene la sesión por el código de autorización y el id del cliente
-    let session = postgres_get_session_by_code_client_id(&pool, code, client_id)
-        .await
-        .map_err(|err| {
-            eprintln!(
-                "Error getting session by code={} and client_id={} : {:?}",
-                code, client_id, err
-            );
-            Status::Forbidden
-        })?;
+    if grant_type == "authorization_code" {
+        // Obtiene la sesión por el código de autorización y el id del cliente
+        let session = postgres_get_session_by_code_client_id(&pool, code, client_id)
+            .await
+            .map_err(|err| {
+                eprintln!(
+                    "Error getting session by code={} and client_id={} : {:?}",
+                    code, client_id, err
+                );
+                Status::Forbidden
+            })?;
 
-    // Log para inspeccionar la sesión
-    //println!("access_token Session: {:?}", session);
+        // Log para inspeccionar la sesión
+        //println!("access_token Session: {:?}", session);
 
-    if session.token.is_some() {
-        eprintln!("Error invalid code");
-        return Err(Status::BadRequest);
-    }
+        // sesison token debe ser null o ""
+        if session.token.is_some() && !session.token.clone().unwrap().is_empty() {
+            eprintln!("Error invalid token");
+            return Err(Status::BadRequest);
+        }
 
-    if session.expires_at.and_utc() < Utc::now() {
-        eprintln!("Error expired code");
-        return Err(Status::BadRequest);
-    }
+        if session.expires_at.and_utc() < Utc::now() {
+            eprintln!("Error expired code");
+            return Err(Status::BadRequest);
+        }
 
-    if session.client_id != *client_id {
-        eprintln!("Error invalid client_id");
-        return Err(Status::BadRequest);
-    }
+        if session.client_id != *client_id {
+            eprintln!("Error invalid client_id");
+            return Err(Status::BadRequest);
+        }
 
-    if session.redirect_uri != *redirect_uri {
-        eprintln!("Error invalid redirect_uri");
-        return Err(Status::BadRequest);
-    }
+        if session.redirect_uri != *redirect_uri {
+            eprintln!("Error invalid redirect_uri");
+            println!("session.redirect_uri: {}", session.redirect_uri);
+            println!("redirect_uri: {}", redirect_uri);
+            return Err(Status::BadRequest);
+        }
 
-    let access_token = randomtoken::random_token(128);
+        let access_token = randomtoken::random_token(128);
 
-    // Actualiza el código de autorización a nulo
-    postgres_update_session_set_token_codenull_by_id(&pool, session.id, &access_token)
+        // Actualiza el código de autorización a nulo
+        postgres_update_session_set_token_codenull_by_id(&pool, session.id, &access_token)
+            .await
+            .or_else(|err| {
+                eprintln!(
+                    "Error updating session token and code to null by id={} : {:?}",
+                    session.id, err
+                );
+                Err(Status::InternalServerError)
+            })
+            .unwrap();
+
+        // calcula expires_in a partir de session.expires_at
+        let expires_in = session.expires_at.and_utc().timestamp() - Utc::now().timestamp();
+
+        let access_token_response = AccessTokenResponse {
+            access_token: access_token.clone(),
+            token_type: "Bearer".to_string(),
+            expires_in,
+        };
+
+        return Ok(Json(access_token_response));
+    } else {
+        // grant_type == "client_credentials"
+
+        let auth_client = postgres_select_auth_client_by_client_id(&pool, client_id)
+            .await
+            .map_err(|err| {
+                eprintln!(
+                    "Error getting session by client_id={} : {:?}",
+                    client_id, err
+                );
+                Status::InternalServerError
+            })?;
+
+        if auth_client.client_secret.is_none() {
+            eprintln!("Error invalid client_secret");
+            return Err(Status::BadRequest);
+        }
+
+        let auth_client_client_secret = auth_client.client_secret.unwrap();
+        let request_client_secret = client_secret.clone().unwrap_or_default();
+        if auth_client_client_secret != request_client_secret {
+            eprintln!("Error incorrect client_secret");
+            return Err(Status::BadRequest);
+        }
+
+        let minutes = 60;
+
+        let expires_at: NaiveDateTime =
+            (Utc::now() + chrono::Duration::minutes(minutes)).naive_utc();
+
+        let attributes = serde_json::Value::Null;
+
+        let access_token = randomtoken::random_token(128);
+
+        postgres_insert_session(
+            &pool,
+            client_id,
+            0,
+            "",
+            &access_token,
+            "",
+            expires_at,
+            attributes,
+        )
         .await
         .or_else(|err| {
-            eprintln!(
-                "Error updating session token and code to null by id={} : {:?}",
-                session.id, err
-            );
+            eprintln!("Error inserting session : {:?}", err);
             Err(Status::InternalServerError)
-        })
-        .unwrap();
+        })?;
 
-    // calcula expires_in a partir de session.expires_at
-    let expires_in = session.expires_at.and_utc().timestamp() - Utc::now().timestamp();
+        let access_token_response = AccessTokenResponse {
+            access_token: access_token.clone(),
+            token_type: "Bearer".to_string(),
+            expires_in: minutes * 60,
+        };
 
-    let access_token_response = AccessTokenResponse {
-        access_token: access_token.clone(),
-        token_type: "Bearer".to_string(),
-        expires_in,
-    };
-
-    Ok(Json(access_token_response))
+        return Ok(Json(access_token_response));
+    }
 }
 
 // a get profile se accede de manera reiterada con el token para obtener la sesión
@@ -226,9 +307,10 @@ async fn new_session(
 
     postgres_insert_session(
         &pool,
-        &code,
         &session_request.client_id,
         session_request.user_id,
+        &code,
+        "",
         &session_request.redirect_uri,
         expires_at,
         session_request.attributes.clone(),
