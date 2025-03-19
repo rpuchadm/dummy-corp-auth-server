@@ -1,3 +1,6 @@
+use base64::Engine; // Para decodificar la cadena Base64
+use base64::engine::general_purpose; // Motor de Base64
+
 use chrono::prelude::*;
 use rocket::form::Form;
 use rocket::http::Status;
@@ -9,18 +12,15 @@ use rocket::serde::{Deserialize, Serialize};
 use rocket::{FromForm, catchers};
 use rocket::{State, catch, delete, get, launch, post, routes};
 use rocket_cors::{AllowedHeaders, AllowedOrigins, CorsOptions};
-
 mod postgresini;
 mod randomtoken;
 mod sesion;
 
-use serde::de;
 use sesion::{
-    Session, postgres_get_session_by_code_client_id, postgres_get_session_by_codenull_token,
-    postgres_insert_session, postgres_select_auth_client_by_client_id,
-    postgres_update_session_set_token_codenull_by_id,
+    Session, postgres_get_session_by_codenull_token, postgres_insert_session,
     postgres_update_session_token_null_closed_at_by_id, redis_get_session_by_token,
-    redis_set_session_by_token,
+    redis_set_session_by_token, validate_authorization_code_usuarios,
+    validate_client_credentials_aplicaciones,
 };
 
 struct AppState {
@@ -30,30 +30,70 @@ struct AppState {
     auth_redis_ttl: i64,
 }
 
+#[derive(Debug)]
+struct BasicAuth {
+    username: String,
+    password: String,
+}
+#[derive(Debug)]
 struct BearerToken(String);
-
+#[derive(Debug)]
+struct BearerOrBasicAuth {
+    bearer: Option<BearerToken>,
+    basic: Option<BasicAuth>,
+}
 #[rocket::async_trait]
-impl<'r> FromRequest<'r> for BearerToken {
+impl<'r> FromRequest<'r> for BearerOrBasicAuth {
     type Error = ();
 
     async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
+        let mut bearer = None;
+        let mut basic = None;
+
+        // Intentar extraer el token Bearer o las credenciales Basic Auth
         if let Some(auth_header) = request.headers().get_one("Authorization") {
             if auth_header.starts_with("Bearer ") {
+                println!(
+                    "BearerOrBasicAuth Authorization Bearer header: {}",
+                    auth_header
+                );
                 let token = auth_header[7..].to_string();
-                return Outcome::Success(BearerToken(token));
+                bearer = Some(BearerToken(token));
+            } else if auth_header.starts_with("Basic ") {
+                println!(
+                    "BearerOrBasicAuth Authorization Basic header: {}",
+                    auth_header
+                );
+                // Intentar extraer las credenciales Basic Auth
+                let encoded = &auth_header[6..];
+                if let Ok(decoded) = general_purpose::STANDARD.decode(encoded) {
+                    if let Ok(credentials) = String::from_utf8(decoded) {
+                        let parts: Vec<&str> = credentials.splitn(2, ':').collect();
+                        if parts.len() == 2 {
+                            let username = parts[0].to_string();
+                            let password = parts[1].to_string();
+                            basic = Some(BasicAuth { username, password });
+                        }
+                    }
+                }
             }
+        } else {
+            println!("BearerOrBasicAuth No Authorization header");
         }
-        Outcome::Error((Status::Unauthorized, ()))
+
+        // Siempre devolver éxito, incluso si no se encontró autenticación
+        Outcome::Success(BearerOrBasicAuth { bearer, basic })
     }
 }
 
 #[derive(Deserialize, Serialize, FromForm)]
 struct AccessTokenRequest {
     grant_type: String,
-    client_id: String,
-    client_secret: Option<String>,
-    redirect_uri: String,
-    code: String,
+    client_id: Option<String>,
+    //client_secret: Option<String>,
+    redirect_uri: Option<String>,
+    code: Option<String>,
+    //refresh_token: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -67,173 +107,81 @@ struct AccessTokenResponse {
 #[post("/accessToken", data = "<request>")]
 async fn access_token(
     state: &State<AppState>,
+    bobauth: BearerOrBasicAuth,
     request: Form<AccessTokenRequest>,
 ) -> Result<Json<AccessTokenResponse>, Status> {
     // procesar los datos del formulario
     let grant_type = &request.grant_type;
-    let client_id = &request.client_id;
-    let client_secret = &request.client_secret;
-    let redirect_uri = &request.redirect_uri;
-    let code = &request.code;
 
-    //print!(
-    //    "access_token grant_type: {}, client_id: {}, code: {}, redirect_uri: {}\n",
-    //    grant_type, client_id, code, redirect_uri
-    //);
-
-    if client_id.is_empty() {
-        eprintln!("Error invalid client_id");
-        return Err(Status::BadRequest);
-    }
-    if grant_type != "authorization_code" && grant_type != "client_credentials" {
-        // && grant_type != "refresh_token" {
-        eprintln!("Error invalid grant_type");
-        return Err(Status::BadRequest);
-    }
-    if grant_type == "authorization_code" && code.is_empty() {
-        eprintln!("Error grant_type authorization_code but code is empty");
-        return Err(Status::BadRequest);
-    }
-    if grant_type == "authorization_code" && redirect_uri.is_empty() {
-        eprintln!("Error grant_type authorization_code but redirect_uri is empty");
-        return Err(Status::BadRequest);
-    }
-    if grant_type == "client_credentials" && client_secret.is_none() {
-        eprintln!("Error grant_type client_credentials but client_secret is empty");
-        return Err(Status::BadRequest);
-    }
+    println!("accessToken grant_type: {:?}", grant_type);
 
     let pool = state.pool.clone();
 
-    if grant_type == "authorization_code" {
-        // Obtiene la sesión por el código de autorización y el id del cliente
-        let session = postgres_get_session_by_code_client_id(&pool, code, client_id)
+    match grant_type.as_str() {
+        // Flujo de Authorization Code (para usuarios)
+        "authorization_code" => {
+            let client_id = request.client_id.as_ref().ok_or(Status::BadRequest)?;
+            //let client_secret = request.client_secret.as_ref().ok_or(Status::BadRequest)?;
+            let redirect_uri = request.redirect_uri.as_ref().ok_or(Status::BadRequest)?;
+            let code = request.code.as_ref().ok_or(Status::BadRequest)?;
+
+            // Validar el código de autorización y las credenciales del cliente
+            let access_token = validate_authorization_code_usuarios(
+                &pool,
+                client_id,
+                //client_secret,
+                redirect_uri,
+                code,
+            )
             .await
-            .map_err(|err| {
-                eprintln!(
-                    "Error getting session by code={} and client_id={} : {:?}",
-                    code, client_id, err
-                );
-                Status::Forbidden
-            })?;
+            .map_err(|_| Status::Unauthorized)?;
 
-        // Log para inspeccionar la sesión
-        //println!("access_token Session: {:?}", session);
-
-        // sesison token debe ser null o ""
-        if session.token.is_some() && !session.token.clone().unwrap().is_empty() {
-            eprintln!("Error invalid token");
-            return Err(Status::BadRequest);
+            Ok(Json(AccessTokenResponse {
+                access_token,
+                token_type: "Bearer".to_string(),
+                expires_in: EXPIRES_IN_SECONDS, // Tiempo de expiración en segundos
+            }))
         }
 
-        if session.expires_at.and_utc() < Utc::now() {
-            eprintln!("Error expired code");
-            return Err(Status::BadRequest);
+        // Flujo de Client Credentials (para aplicaciones)
+        "client_credentials" => {
+            let auth = bobauth.basic.ok_or(Status::BadRequest)?;
+            let client_id = auth.username;
+            let client_secret = auth.password;
+
+            // Validar las credenciales del cliente
+            let access_token =
+                validate_client_credentials_aplicaciones(&pool, &client_id, &client_secret)
+                    .await
+                    .map_err(|_| Status::Unauthorized)?;
+
+            Ok(Json(AccessTokenResponse {
+                access_token,
+                token_type: "Bearer".to_string(),
+                expires_in: EXPIRES_IN_SECONDS, // Tiempo de expiración en segundos
+            }))
         }
 
-        if session.client_id != *client_id {
-            eprintln!("Error invalid client_id");
-            return Err(Status::BadRequest);
-        }
-
-        if session.redirect_uri != *redirect_uri {
-            eprintln!("Error invalid redirect_uri");
-            println!("session.redirect_uri: {}", session.redirect_uri);
-            println!("redirect_uri: {}", redirect_uri);
-            return Err(Status::BadRequest);
-        }
-
-        let access_token = randomtoken::random_token(128);
-
-        // Actualiza el código de autorización a nulo
-        postgres_update_session_set_token_codenull_by_id(&pool, session.id, &access_token)
-            .await
-            .or_else(|err| {
-                eprintln!(
-                    "Error updating session token and code to null by id={} : {:?}",
-                    session.id, err
-                );
-                Err(Status::InternalServerError)
-            })
-            .unwrap();
-
-        // calcula expires_in a partir de session.expires_at
-        let expires_in = session.expires_at.and_utc().timestamp() - Utc::now().timestamp();
-
-        let access_token_response = AccessTokenResponse {
-            access_token: access_token.clone(),
-            token_type: "Bearer".to_string(),
-            expires_in,
-        };
-
-        return Ok(Json(access_token_response));
-    } else {
-        // grant_type == "client_credentials"
-
-        let auth_client = postgres_select_auth_client_by_client_id(&pool, client_id)
-            .await
-            .map_err(|err| {
-                eprintln!(
-                    "Error getting session by client_id={} : {:?}",
-                    client_id, err
-                );
-                Status::InternalServerError
-            })?;
-
-        if auth_client.client_secret.is_none() {
-            eprintln!("Error invalid client_secret");
-            return Err(Status::BadRequest);
-        }
-
-        let auth_client_client_secret = auth_client.client_secret.unwrap();
-        let request_client_secret = client_secret.clone().unwrap_or_default();
-        if auth_client_client_secret != request_client_secret {
-            eprintln!("Error incorrect client_secret");
-            return Err(Status::BadRequest);
-        }
-
-        let minutes = 60;
-
-        let expires_at: NaiveDateTime =
-            (Utc::now() + chrono::Duration::minutes(minutes)).naive_utc();
-
-        let attributes = serde_json::Value::Null;
-
-        let access_token = randomtoken::random_token(128);
-
-        postgres_insert_session(
-            &pool,
-            client_id,
-            0,
-            "",
-            &access_token,
-            "",
-            expires_at,
-            attributes,
-        )
-        .await
-        .or_else(|err| {
-            eprintln!("Error inserting session : {:?}", err);
-            Err(Status::InternalServerError)
-        })?;
-
-        let access_token_response = AccessTokenResponse {
-            access_token: access_token.clone(),
-            token_type: "Bearer".to_string(),
-            expires_in: minutes * 60,
-        };
-
-        return Ok(Json(access_token_response));
+        _ => Err(Status::BadRequest),
     }
 }
 
 // a get profile se accede de manera reiterada con el token para obtener la sesión
 #[get("/profile")]
-async fn profile(state: &State<AppState>, token: BearerToken) -> Result<Json<Session>, Status> {
+async fn profile(
+    state: &State<AppState>,
+    bobauth: BearerOrBasicAuth,
+) -> Result<Json<Session>, Status> {
     let client = redis::Client::open(state.redis_connection_string.clone()).map_err(|err| {
         eprintln!("Error connecting to redis: {:?}", err);
         Status::InternalServerError
     })?;
+
+    let token = bobauth
+        .bearer
+        .ok_or(Status::Unauthorized)
+        .map_err(|_| Status::Unauthorized)?;
+
     let session = redis_get_session_by_token(&client, &token.0)
         .await
         .map_err(|err| {
@@ -287,12 +235,20 @@ struct NewSessionRequest {
     attributes: serde_json::Value,
 }
 
+// TODO arreglar expires: EXPIRES_IN_SECONDS vs expires_in_min
+const EXPIRES_IN_SECONDS: i64 = 3600;
+
 #[post("/session", data = "<session_request>")]
 async fn new_session(
     state: &State<AppState>,
     session_request: Json<NewSessionRequest>,
-    token: BearerToken,
+    bobauth: BearerOrBasicAuth,
 ) -> Result<Json<Session>, Status> {
+    let token = bobauth
+        .bearer
+        .ok_or(Status::Unauthorized)
+        .map_err(|_| Status::Unauthorized)?;
+
     if token.0 != state.super_secret_token {
         eprintln!("Error invalid super secret token");
         return Err(Status::Unauthorized);
@@ -348,8 +304,12 @@ struct DeleteSessionRequest {
 async fn delete_session(
     state: &State<AppState>,
     session_request: Json<DeleteSessionRequest>,
-    token: BearerToken,
+    bobauth: BearerOrBasicAuth,
 ) -> Result<Status, Status> {
+    let token = bobauth
+        .bearer
+        .ok_or(Status::Unauthorized)
+        .map_err(|_| Status::Unauthorized)?;
     if token.0 != state.super_secret_token {
         eprintln!("Error invalid super secret token");
         return Err(Status::Unauthorized);
@@ -497,4 +457,15 @@ fn not_found(req: &Request) -> NotFound<String> {
 
     // Devolver una respuesta 404 personalizada
     NotFound(format!("Lo siento, la ruta '{}' no existe.", req.uri()))
+}
+
+/// Decodifica el encabezado de autorización Basic Auth
+fn decode_basic_auth(auth_header: &str) -> Result<(String, String), Status> {
+    let encoded = auth_header.trim_start_matches("Basic ");
+    let decoded = base64::decode(encoded).map_err(|_| Status::BadRequest)?;
+    let credentials = String::from_utf8(decoded).map_err(|_| Status::BadRequest)?;
+    let mut parts = credentials.splitn(2, ':');
+    let client_id = parts.next().ok_or(Status::BadRequest)?.to_string();
+    let client_secret = parts.next().ok_or(Status::BadRequest)?.to_string();
+    Ok((client_id, client_secret))
 }

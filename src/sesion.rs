@@ -1,6 +1,12 @@
+use chrono::{NaiveDateTime, Utc};
 use redis::AsyncCommands;
-use rocket::serde::{Deserialize, Serialize};
+use rocket::{
+    http::Status,
+    serde::{Deserialize, Serialize},
+};
 use sqlx::{Decode, FromRow};
+
+use crate::{EXPIRES_IN_SECONDS, randomtoken};
 
 #[derive(Serialize, Deserialize, Clone, FromRow, Decode, Debug)]
 pub struct Session {
@@ -216,4 +222,123 @@ pub async fn postgres_select_auth_client_by_client_id(
     .await?;
 
     Ok(auth_client)
+}
+
+pub async fn validate_authorization_code_usuarios(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    client_id: &str,
+    //client_secret: &str,
+    redirect_uri: &str,
+    code: &str,
+) -> Result<String, ()> {
+    // Validar el código de autorización y las credenciales del cliente
+    //let client = postgres_select_auth_client_by_client_id(pool, client_id)
+    //    .await
+    //    .map_err(|_| ())?;
+
+    //if client.client_secret != Some(client_secret.to_string()) {
+    //    return Err(());
+    //}
+
+    let session = postgres_get_session_by_code_client_id(pool, code, client_id)
+        .await
+        .map_err(|_| ())?;
+
+    // si el token no es nulo y es diferente de vacío
+    if session.token.is_some() {
+        let token = session.token.unwrap();
+        if !token.is_empty() && token != "" {
+            eprintln!("Error invalid token not null {}", token);
+            return Err(());
+        }
+    }
+
+    if session.expires_at < Utc::now().naive_utc() {
+        eprintln!("Error expired code");
+        return Err(());
+    }
+
+    if session.redirect_uri != *redirect_uri {
+        eprintln!("Error invalid redirect_uri");
+        println!("session.redirect_uri: {}", session.redirect_uri);
+        println!("redirect_uri: {}", redirect_uri);
+        return Err(());
+    }
+
+    let access_token = randomtoken::random_token(128);
+
+    // Actualiza el código de autorización a nulo
+    postgres_update_session_set_token_codenull_by_id(&pool, session.id, &access_token)
+        .await
+        .or_else(|err| {
+            eprintln!(
+                "Error updating session token and code to null by id={} : {:?}",
+                session.id, err
+            );
+            Err(Status::InternalServerError)
+        })
+        .unwrap();
+
+    // calcula expires_in a partir de session.expires_at
+    //let expires_in = session.expires_at.and_utc().timestamp() - Utc::now().timestamp();
+
+    Ok(access_token)
+}
+
+pub async fn validate_client_credentials_aplicaciones(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<String, ()> {
+    // Validar las credenciales del cliente
+    let client = postgres_select_auth_client_by_client_id(pool, client_id)
+        .await
+        .map_err(|_| ())?;
+
+    if client.client_secret.is_none() {
+        eprint!("Error undefined client.client_secret");
+        return Err(());
+    }
+
+    if client.client_secret != Some(client_secret.to_string()) {
+        eprint!("Error invalid client_secret");
+        return Err(());
+    }
+
+    let expires_at: NaiveDateTime =
+        (Utc::now() + chrono::Duration::seconds(EXPIRES_IN_SECONDS)).naive_utc();
+
+    let attributes = serde_json::Value::Null;
+
+    let access_token = randomtoken::random_token(128);
+
+    postgres_insert_session(
+        &pool,
+        client_id,
+        0,
+        "",
+        &access_token,
+        "",
+        expires_at,
+        attributes,
+    )
+    .await
+    .or_else(|err| {
+        eprintln!("Error inserting session: {:?}", err);
+        Err(Status::InternalServerError)
+    })
+    .unwrap();
+
+    Ok(access_token)
+}
+
+/// Decodifica el encabezado de autorización Basic Auth
+fn decode_basic_auth(auth_header: &str) -> Result<(String, String), Status> {
+    let encoded = auth_header.trim_start_matches("Basic ");
+    let decoded = base64::decode(encoded).map_err(|_| Status::BadRequest)?;
+    let credentials = String::from_utf8(decoded).map_err(|_| Status::BadRequest)?;
+    let mut parts = credentials.splitn(2, ':');
+    let client_id = parts.next().ok_or(Status::BadRequest)?.to_string();
+    let client_secret = parts.next().ok_or(Status::BadRequest)?.to_string();
+    Ok((client_id, client_secret))
 }
