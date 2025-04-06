@@ -397,10 +397,10 @@ async fn rocket() -> _ {
             })
             .unwrap();
 
-    // sacar de variables de entorno AUTH_SUPER_SECRET_TOKEN
-    let auth_super_secret_token = std::env::var("AUTH_SUPER_SECRET_TOKEN").unwrap_or_default();
+    // sacar de variables de entorno AUTH_TOKEN
+    let auth_super_secret_token = std::env::var("AUTH_TOKEN").unwrap_or_default();
     if auth_super_secret_token.is_empty() {
-        eprintln!("Error AUTH_SUPER_SECRET_TOKEN is empty");
+        eprintln!("Error AUTH_TOKEN is empty");
         std::process::exit(1);
     }
 
