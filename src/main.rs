@@ -25,7 +25,7 @@ use sesion::{
 
 struct AppState {
     pool: sqlx::Pool<sqlx::Postgres>,
-    super_secret_token: String,
+    auth_super_secret_token: String,
     redis_connection_string: String,
     auth_redis_ttl: i64,
 }
@@ -249,8 +249,8 @@ async fn new_session(
         .ok_or(Status::Unauthorized)
         .map_err(|_| Status::Unauthorized)?;
 
-    if token.0 != state.super_secret_token {
-        eprintln!("Error invalid super secret token");
+    if token.0 != state.auth_super_secret_token {
+        eprintln!("Error invalid auth super secret token");
         return Err(Status::Unauthorized);
     }
 
@@ -310,8 +310,8 @@ async fn delete_session(
         .bearer
         .ok_or(Status::Unauthorized)
         .map_err(|_| Status::Unauthorized)?;
-    if token.0 != state.super_secret_token {
-        eprintln!("Error invalid super secret token");
+    if token.0 != state.auth_super_secret_token {
+        eprintln!("Error invalid auth super secret token");
         return Err(Status::Unauthorized);
     }
 
@@ -342,8 +342,8 @@ async fn delete_session(
 
 #[launch]
 async fn rocket() -> _ {
-    let super_secret_token = std::env::var("AUTH_SUPER_SECRET_TOKEN").unwrap_or_default();
-    if super_secret_token.is_empty() {
+    let auth_super_secret_token = std::env::var("AUTH_SUPER_SECRET_TOKEN").unwrap_or_default();
+    if auth_super_secret_token.is_empty() {
         eprintln!("Error AUTH_SUPER_SECRET_TOKEN is empty");
         std::process::exit(1);
     }
@@ -397,13 +397,6 @@ async fn rocket() -> _ {
             })
             .unwrap();
 
-    // sacar de variables de entorno AUTH_TOKEN
-    let auth_super_secret_token = std::env::var("AUTH_TOKEN").unwrap_or_default();
-    if auth_super_secret_token.is_empty() {
-        eprintln!("Error AUTH_TOKEN is empty");
-        std::process::exit(1);
-    }
-
     postgresini::initialization(pool.clone()).await;
 
     let cors = cors_options().to_cors().expect("Error al configurar CORS");
@@ -411,7 +404,7 @@ async fn rocket() -> _ {
     rocket::build()
         .manage(AppState {
             pool,
-            super_secret_token,
+            auth_super_secret_token,
             redis_connection_string,
             auth_redis_ttl,
         })
