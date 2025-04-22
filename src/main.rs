@@ -285,7 +285,7 @@ async fn new_session(
         client_id: session_request.client_id.clone(),
         code: code_some,
         token: token_none,
-        user_id: session_request.user_id,
+        user_id: Some(session_request.user_id),
         redirect_uri: session_request.redirect_uri.clone(),
         created_at: chrono::Utc::now().naive_utc(),
         expires_at,

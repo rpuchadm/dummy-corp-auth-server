@@ -16,7 +16,7 @@ pub struct Session {
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
-    pub user_id: i32,
+    pub user_id: Option<i32>,
     pub redirect_uri: String,
     pub created_at: chrono::NaiveDateTime,
     pub expires_at: chrono::NaiveDateTime,
