@@ -264,7 +264,7 @@ async fn new_session(
     postgres_insert_session(
         &pool,
         &session_request.client_id,
-        session_request.user_id,
+        Some(session_request.user_id),
         &code,
         "",
         &session_request.redirect_uri,
@@ -346,6 +346,8 @@ async fn rocket() -> _ {
     if auth_super_secret_token.is_empty() {
         eprintln!("Error AUTH_SUPER_SECRET_TOKEN is empty");
         std::process::exit(1);
+        //} else {
+        //    println!("auth_super_secret_token: {}", auth_super_secret_token);
     }
 
     let redis_password = std::env::var("REDIS_PASSWORD").unwrap_or_default();
@@ -355,6 +357,10 @@ async fn rocket() -> _ {
     if redis_password.is_empty() || redis_host.is_empty() || redis_port.is_empty() {
         eprintln!("Error REDIS_PASSWORD, REDIS_SERVICE or REDIS_PORT is empty");
         std::process::exit(1);
+        //} else {
+        //    println!("redis_password: {}", redis_password);
+        //    println!("redis_host: {}", redis_host);
+        //    println!("redis_port: {}", redis_port);
     }
 
     let redis_connection_string =
@@ -381,12 +387,19 @@ async fn rocket() -> _ {
             "Error POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD or POSTGRES_SERVICE is empty"
         );
         std::process::exit(1);
+        //} else {
+        //    println!("postgres_db: {}", postgres_db);
+        //    println!("postgres_user: {}", postgres_user);
+        //    println!("postgres_password: {}", postgres_password);
+        //    println!("postgres_host: {}", postgres_host);
     }
 
     let postgres_connexion_string = format!(
         "postgres://{}:{}@{}/{}",
         postgres_user, postgres_password, postgres_host, postgres_db
     );
+
+    print!("postgres_connexion_string: {}\n", postgres_connexion_string);
 
     let pool: sqlx::Pool<sqlx::Postgres> =
         sqlx::postgres::PgPool::connect(postgres_connexion_string.as_str())
@@ -397,6 +410,7 @@ async fn rocket() -> _ {
             })
             .unwrap();
 
+    // TODO comentar cuando ya no estemos en desarrollo
     postgresini::initialization(pool.clone()).await;
 
     let cors = cors_options().to_cors().expect("Error al configurar CORS");

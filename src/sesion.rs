@@ -26,18 +26,13 @@ pub struct Session {
 pub async fn postgres_insert_session(
     pool: &sqlx::Pool<sqlx::Postgres>,
     client_id: &str,
-    user_id: i32,
+    user_id: Option<i32>, // Cambiado a Option<i32>
     code: &str,
     token: &str,
     redirect_uri: &str,
     expires_in_min: chrono::NaiveDateTime,
     attributes: serde_json::Value,
 ) -> Result<(), sqlx::Error> {
-    //println!(
-    //    "postgres_insert_session: client_id: {}, user_id: {}, code: {}, token: {}, redirect_uri: {}, expires_in_min: {}, attributes: {}",
-    //    client_id, user_id, code, token, redirect_uri, expires_in_min, attributes
-    //);
-
     sqlx::query(
         r#"
         INSERT INTO sessions (
@@ -54,7 +49,7 @@ pub async fn postgres_insert_session(
         "#,
     )
     .bind(client_id)
-    .bind(user_id)
+    .bind(user_id) // sqlx maneja automáticamente el Option
     .bind(code)
     .bind(token)
     .bind(redirect_uri)
@@ -315,7 +310,7 @@ pub async fn validate_client_credentials_aplicaciones(
     postgres_insert_session(
         &pool,
         client_id,
-        0,
+        None,
         "",
         &access_token,
         "",

@@ -33,12 +33,14 @@ pub async fn initialization(pool: sqlx::Pool<sqlx::Postgres>) {
             client_id TEXT NOT NULL,
             code TEXT,
             token TEXT,
-            user_id INTEGER NOT NULL,
+            user_id INTEGER,
             redirect_uri TEXT NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP NOT NULL,
             closed_at TIMESTAMP,
-            attributes JSONB NOT NULL
+            attributes JSONB NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES persons(id),
+            FOREIGN KEY (client_id) REFERENCES auth_clients(client_id)	
         )
         "#,
     )
