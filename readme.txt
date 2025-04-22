@@ -12,7 +12,7 @@ sudo vim /etc/hosts
 127.0.0.1       crm.mydomain.com
 
 
-cargo build &&\
+clear && cargo build &&\
 cp -v target/debug/dummy-corp-auth-server docker &&\
 cp -v Rocket.toml docker/ &&\
 cd docker &&\
